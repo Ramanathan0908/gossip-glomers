@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
@@ -28,30 +29,7 @@ func (s *Server) Broadcast(msg maelstrom.Message) error {
 		return err
 	}
 
-	s.mu.Lock()
-	if _, ok := s.values[body.Message]; ok {
-		s.mu.Unlock()
-		return s.n.Reply(msg, map[string]any{
-			"type": "broadcast_ok",
-		})
-	} else {
-		s.values[body.Message] = struct{}{}
-	}
-	s.mu.Unlock()
-
-	for _, ngbr := range s.ngbrs {
-		if ngbr == msg.Src {
-			continue
-		}
-		err := s.n.Send(ngbr, map[string]any{
-			"type":    "broadcast",
-			"message": body.Message,
-		})
-
-		if err != nil {
-			return err
-		}
-	}
+	go s.handleMsg(body.Message, msg.Src)
 
 	return s.n.Reply(msg, map[string]any{
 		"type": "broadcast_ok",
@@ -93,4 +71,55 @@ func (s *Server) Topology(msg maelstrom.Message) error {
 	return s.n.Reply(msg, map[string]any{
 		"type": "topology_ok",
 	})
+}
+
+func (s *Server) storeMsg(msg float64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.values[msg]; ok {
+		return false
+	}
+
+	s.values[msg] = struct{}{}
+	return true
+}
+
+func (s *Server) gossip(msg float64, dest string) {
+	gossipMsg := map[string]any{
+		"type":    "broadcast",
+		"message": msg,
+	}
+	for {
+		done := make(chan struct{})
+
+		err := s.n.RPC(dest, gossipMsg, func(msg maelstrom.Message) error {
+			close(done)
+			return nil
+		})
+
+		if err != nil {
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		select {
+		case <-done:
+			return
+		case <-time.After(10 * time.Millisecond):
+			continue
+		}
+	}
+}
+
+func (s *Server) handleMsg(msg float64, src string) {
+	if !s.storeMsg(msg) {
+		return
+	}
+
+	for _, ngbr := range s.ngbrs {
+		if ngbr == src {
+			continue
+		}
+		go s.gossip(msg, ngbr)
+	}
 }
