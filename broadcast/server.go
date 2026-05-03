@@ -99,13 +99,13 @@ func (s *Server) gossip(msg float64, dest string) {
 		})
 
 		if err != nil {
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(250 * time.Millisecond)
 		}
 
 		select {
 		case <-done:
 			return
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(300 * time.Millisecond):
 			continue
 		}
 	}
